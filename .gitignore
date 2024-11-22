@@ -1,0 +1,20 @@
+# Rust
+target/
+**/*.rs.bk
+
+# C
+*.o
+*.a
+*.so
+*.d
+
+# General
+*.log
+*.tmp
+*.swp
+.DS_Store
+*.o
+*.asm
+
+*_c
+
