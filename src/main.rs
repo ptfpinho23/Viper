@@ -276,10 +276,10 @@ impl CodeGenerator {
     }
 
     fn emit_footer(&mut self) {
-        self.emit("    mov rax, 60");
-        self.emit("    xor rdi, rdi");
+        self.emit("    mov rax, 60       ; syscall: exit");
+        self.emit("    xor rdi, rdi      ; return code: 0");
         self.emit("    syscall");
-
+    
         self.emit("division_by_zero:");
         self.emit("    mov rax, 1");
         self.emit("    mov rdi, 1");
@@ -289,7 +289,25 @@ impl CodeGenerator {
         self.emit("    mov rax, 60");
         self.emit("    xor rdi, rdi");
         self.emit("    syscall");
+    
+        self.emit("; Subroutine to convert an integer in RAX to a string in the buffer");
+        self.emit("int_to_string:");
+        self.emit("    xor rdx, rdx            ; Clear rdx (remainder)");
+        self.emit("    mov rbx, 10             ; Divisor for decimal system");
+        self.emit("    add rcx, 20             ; Move pointer to the end of the buffer");
+        self.emit("    dec rcx                 ; Reserve space for the last character");
+        self.emit(".convert_loop:");
+        self.emit("    xor rdx, rdx            ; Clear rdx before division");
+        self.emit("    div rbx                 ; Divide rax by 10, remainder in rdx");
+        self.emit("    add dl, '0'             ; Convert remainder to ASCII");
+        self.emit("    mov [rcx], dl           ; Store the ASCII character in the buffer");
+        self.emit("    dec rcx                 ; Move to the previous position in the buffer");
+        self.emit("    test rax, rax           ; Check if quotient is 0");
+        self.emit("    jnz .convert_loop       ; Repeat if not 0");
+        self.emit("    inc rcx                 ; Adjust pointer to the start of the string");
+        self.emit("    ret");
     }
+    
 
     fn generate(&mut self, node: &ASTNode) {
         match node {
