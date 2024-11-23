@@ -1,6 +1,6 @@
+use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::fs;
 
 #[derive(Debug, PartialEq, Clone)]
 enum Token {
@@ -12,8 +12,12 @@ enum Token {
     Divide,
     Assign,
     Print,
+    If,
+    Else,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     EOF,
 }
 
@@ -71,17 +75,18 @@ impl Lexer {
                         break;
                     }
                 }
-                
-                if identifier == "print" {
-                    return Token::Print;
-                }
 
-                Token::Identifier(identifier)
+                match identifier.as_str() {
+                    "print" => Token::Print,
+                    "if" => Token::If,
+                    "else" => Token::Else,
+                    _ => Token::Identifier(identifier),
+                }
             }
             Some(c) if c.is_numeric() => {
                 let mut number = c.to_string();
                 while let Some(next) = self.peek_char() {
-                    if next.is_numeric() {
+                    if next.is_numeric() || next == '.' {
                         number.push(self.next_char().unwrap());
                     } else {
                         break;
@@ -91,11 +96,13 @@ impl Lexer {
             }
             Some('+') => Token::Plus,
             Some('-') => Token::Minus,
+            Some('*') => Token::Multiply,
+            Some('/') => Token::Divide,
             Some('=') => Token::Assign,
             Some('(') => Token::LParen,
             Some(')') => Token::RParen,
-            Some('*') => Token::Multiply,
-            Some('/') => Token::Divide,
+            Some('{') => Token::LBrace,
+            Some('}') => Token::RBrace,
             None => Token::EOF,
             Some(c) => panic!("Unexpected character in input: '{}'", c),
         }
@@ -116,7 +123,12 @@ enum ASTNode {
     Number(f64),
     Variable(String),
     Print {
-        variable: String,
+        expression: Box<ASTNode>,
+    },
+    If {
+        condition: Box<ASTNode>,
+        then_branch: Vec<ASTNode>,
+        else_branch: Vec<ASTNode>,
     },
 }
 
@@ -132,6 +144,16 @@ impl ASTNode {
                 ASTNode::collect_variables(left, vars);
                 ASTNode::collect_variables(right, vars);
             }
+            ASTNode::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                ASTNode::collect_variables(condition, vars);
+                for stmt in then_branch.iter().chain(else_branch.iter()) {
+                    ASTNode::collect_variables(stmt, vars);
+                }
+            }
             _ => {}
         }
     }
@@ -145,7 +167,10 @@ struct Parser {
 impl Parser {
     fn new(mut lexer: Lexer) -> Self {
         let current_token = lexer.next_token();
-        Parser { lexer, current_token }
+        Parser {
+            lexer,
+            current_token,
+        }
     }
 
     fn eat(&mut self, token: Token) {
@@ -176,7 +201,10 @@ impl Parser {
     fn parse_expression(&mut self) -> ASTNode {
         let mut left = self.parse_term();
 
-        while matches!(self.current_token, Token::Plus | Token::Minus | Token::Multiply | Token::Divide) {
+        while matches!(
+            self.current_token,
+            Token::Plus | Token::Minus | Token::Multiply | Token::Divide
+        ) {
             let operator = match self.current_token {
                 Token::Plus => {
                     self.eat(Token::Plus);
@@ -223,22 +251,86 @@ impl Parser {
         }
     }
 
+    fn parse_comparison(&mut self) -> ASTNode {
+        let left = self.parse_expression();
+
+        if let Token::Assign = self.current_token {
+            self.eat(Token::Assign);
+            if let Token::Assign = self.current_token {
+                self.eat(Token::Assign);
+                let right = self.parse_expression();
+                return ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: "==".to_string(),
+                    right: Box::new(right),
+                };
+            } else {
+                panic!(
+                    "Unexpected token: {:?}. Expected '=' for comparison.",
+                    self.current_token
+                );
+            }
+        }
+
+        left
+    }
+    fn parse_if(&mut self) -> ASTNode {
+        self.eat(Token::If);
+        self.eat(Token::LParen);
+        let condition = self.parse_comparison(); // handle comparisons here
+        self.eat(Token::RParen);
+        self.eat(Token::LBrace);
+        let then_branch = self.parse_block();
+        self.eat(Token::RBrace);
+
+        let else_branch = if self.current_token == Token::Else {
+            self.eat(Token::Else);
+            self.eat(Token::LBrace);
+            let branch = self.parse_block();
+            self.eat(Token::RBrace);
+            branch
+        } else {
+            vec![]
+        };
+
+        ASTNode::If {
+            condition: Box::new(condition),
+            then_branch,
+            else_branch,
+        }
+    }
+    fn parse_block(&mut self) -> Vec<ASTNode> {
+        let mut statements = Vec::new();
+        while self.current_token != Token::RBrace && self.current_token != Token::EOF {
+            statements.push(self.parse_statement());
+        }
+        statements
+    }
+
+    fn parse_statement(&mut self) -> ASTNode {
+        match self.current_token {
+            Token::If => self.parse_if(),
+            Token::Print => {
+                self.eat(Token::Print);
+                self.eat(Token::LParen);
+                let expr = self.parse_comparison(); // Updated to handle comparisons
+                self.eat(Token::RParen);
+                ASTNode::Print {
+                    expression: Box::new(expr),
+                }
+            }
+            Token::Identifier(_) => self.parse_assignment(),
+            _ => panic!(
+                "Unexpected token: {:?}. Expected a statement.",
+                self.current_token
+            ),
+        }
+    }
+
     fn parse(&mut self) -> Vec<ASTNode> {
         let mut nodes = Vec::new();
         while self.current_token != Token::EOF {
-            if self.current_token == Token::Print {
-                self.eat(Token::Print);
-                self.eat(Token::LParen);
-                if let Token::Identifier(name) = self.current_token.clone() {
-                    self.eat(Token::Identifier(name.clone()));
-                    self.eat(Token::RParen);
-                    nodes.push(ASTNode::Print { variable: name });
-                } else {
-                    panic!("Expected an identifier inside 'print(...)'");
-                }
-            } else {
-                nodes.push(self.parse_assignment());
-            }
+            nodes.push(self.parse_statement());
         }
         nodes
     }
@@ -246,12 +338,16 @@ impl Parser {
 
 struct CodeGenerator {
     output: File,
+    label_counter: usize,
 }
 
 impl CodeGenerator {
     fn new(output_path: &str) -> Self {
         let file = File::create(output_path).expect("Unable to create file");
-        CodeGenerator { output: file }
+        CodeGenerator {
+            output: file,
+            label_counter: 0,
+        }
     }
 
     fn emit(&mut self, instruction: &str) {
@@ -267,8 +363,6 @@ impl CodeGenerator {
 
         self.emit("section .data");
         self.emit("newline db 0xA, 0");
-        self.emit("error_message db \"Error: Division by zero\", 0xA, 0");
-        self.emit("error_len equ $ - error_message");
 
         self.emit("section .text");
         self.emit("global _start");
@@ -279,35 +373,29 @@ impl CodeGenerator {
         self.emit("    mov rax, 60       ; syscall: exit");
         self.emit("    xor rdi, rdi      ; return code: 0");
         self.emit("    syscall");
-    
-        self.emit("division_by_zero:");
-        self.emit("    mov rax, 1");
-        self.emit("    mov rdi, 1");
-        self.emit("    mov rsi, error_message");
-        self.emit("    mov rdx, error_len");
-        self.emit("    syscall");
-        self.emit("    mov rax, 60");
-        self.emit("    xor rdi, rdi");
-        self.emit("    syscall");
-    
+
         self.emit("; Subroutine to convert an integer in RAX to a string in the buffer");
         self.emit("int_to_string:");
-        self.emit("    xor rdx, rdx            ; Clear rdx (remainder)");
-        self.emit("    mov rbx, 10             ; Divisor for decimal system");
-        self.emit("    add rcx, 20             ; Move pointer to the end of the buffer");
-        self.emit("    dec rcx                 ; Reserve space for the last character");
+        self.emit("    xor rdx, rdx              ; Clear rdx (remainder)");
+        self.emit("    mov rbx, 10               ; Divisor for decimal system");
+        self.emit("    add rcx, 20               ; Move pointer to the end of the buffer");
+        self.emit("    dec rcx                   ; Reserve space for the last character");
         self.emit(".convert_loop:");
-        self.emit("    xor rdx, rdx            ; Clear rdx before division");
-        self.emit("    div rbx                 ; Divide rax by 10, remainder in rdx");
-        self.emit("    add dl, '0'             ; Convert remainder to ASCII");
-        self.emit("    mov [rcx], dl           ; Store the ASCII character in the buffer");
-        self.emit("    dec rcx                 ; Move to the previous position in the buffer");
-        self.emit("    test rax, rax           ; Check if quotient is 0");
-        self.emit("    jnz .convert_loop       ; Repeat if not 0");
-        self.emit("    inc rcx                 ; Adjust pointer to the start of the string");
+        self.emit("    xor rdx, rdx              ; Clear rdx before division");
+        self.emit("    div rbx                   ; Divide rax by 10, remainder in rdx");
+        self.emit("    add dl, '0'               ; Convert remainder to ASCII");
+        self.emit("    mov [rcx], dl             ; Store the ASCII character in the buffer");
+        self.emit("    dec rcx                   ; Move to the previous position in the buffer");
+        self.emit("    test rax, rax             ; Check if quotient is 0");
+        self.emit("    jnz .convert_loop         ; Repeat if not 0");
+        self.emit("    inc rcx                   ; Adjust pointer to the start of the string");
         self.emit("    ret");
     }
-    
+
+    fn new_label(&mut self, prefix: &str) -> String {
+        self.label_counter += 1;
+        format!("{}_{}", prefix, self.label_counter)
+    }
 
     fn generate(&mut self, node: &ASTNode) {
         match node {
@@ -315,7 +403,11 @@ impl CodeGenerator {
                 self.generate(value);
                 self.emit(&format!("    mov [{}], rax", variable));
             }
-            ASTNode::BinaryOp { left, operator, right } => {
+            ASTNode::BinaryOp {
+                left,
+                operator,
+                right,
+            } => {
                 self.generate(right);
                 self.emit("    push rax");
                 self.generate(left);
@@ -325,12 +417,15 @@ impl CodeGenerator {
                     "-" => self.emit("    sub rax, rbx"),
                     "*" => self.emit("    imul rax, rbx"),
                     "/" => {
-                        self.emit("    cmp rbx, 0");
-                        self.emit("    je division_by_zero");
                         self.emit("    xor rdx, rdx");
                         self.emit("    div rbx");
                     }
-                    _ => panic!("Unsupported operator"),
+                    "==" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    sete al"); // at to 1 if equal
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
+                    _ => panic!("Unsupported operator: {}", operator),
                 }
             }
             ASTNode::Number(value) => {
@@ -339,8 +434,8 @@ impl CodeGenerator {
             ASTNode::Variable(name) => {
                 self.emit(&format!("    mov rax, [{}]", name));
             }
-            ASTNode::Print { variable } => {
-                self.emit(&format!("    mov rax, [{}]", variable));
+            ASTNode::Print { expression } => {
+                self.generate(expression);
                 self.emit("    mov rcx, buffer");
                 self.emit("    call int_to_string");
                 self.emit("    mov rdx, buffer");
@@ -357,10 +452,29 @@ impl CodeGenerator {
                 self.emit("    mov rdi, 1");
                 self.emit("    syscall");
             }
+            ASTNode::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.generate(condition);
+                self.emit("    cmp rax, 0");
+                let else_label = self.new_label("else");
+                let end_label = self.new_label("end_if");
+                self.emit(&format!("    je {}", else_label));
+                for stmt in then_branch {
+                    self.generate(stmt);
+                }
+                self.emit(&format!("    jmp {}", end_label));
+                self.emit(&format!("{}:", else_label));
+                for stmt in else_branch {
+                    self.generate(stmt);
+                }
+                self.emit(&format!("{}:", end_label));
+            }
         }
     }
 }
-
 fn main() {
     let source_path = "example.vp";
     let source_code = fs::read_to_string(source_path).unwrap();
