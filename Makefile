@@ -52,22 +52,22 @@ benchmark:
 	elapsed=$$((end_time - start_time)); \
 	echo "Python exec time: $$((elapsed / 1000000)) ms"
 
+	@echo "Compiling Viper..."
+	@cargo run > /dev/null 2>&1
+	@nasm -f elf64 output.asm -o output.o > /dev/null 2>&1
+	@$(LINKER) output.o -o output > /dev/null 2>&1
+	
+	@echo "Executing Viper..."
 	@start_time=$$(date +%s%N); \
-	cargo run > /dev/null 2>&1; \
-	nasm -f elf64 output.asm -o output.o; \
-	$(LINKER) output.o -o output; \
-
-	if [ "$(UNAME_M)" = "x86_64" ]; then \
-		./output > /dev/null 2>&1; \
-	else \
-		docker run --rm -v $(shell pwd):/app -w /app ubuntu:latest ./output > /dev/null 2>&1; \
-	fi; \
-
+	./output > /dev/null 2>&1; \
 	end_time=$$(date +%s%N); \
 	elapsed=$$((end_time - start_time)); \
 	echo "Viper exec time: $$((elapsed / 1000000)) ms"
 
-	@gcc -O3 ./benchmarks/test.c -o example_c
+	@echo "Compiling C..."
+	@gcc -O3 ./benchmarks/test.c -o example_c > /dev/null 2>&1
+	
+	@echo "Executing C..."
 	@start_time=$$(date +%s%N); \
 	./example_c > /dev/null 2>&1; \
 	end_time=$$(date +%s%N); \
