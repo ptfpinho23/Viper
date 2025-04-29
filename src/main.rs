@@ -14,6 +14,7 @@ enum Token {
     Print,
     If,
     Else,
+    While,
     LParen,
     RParen,
     LBrace,
@@ -80,6 +81,7 @@ impl Lexer {
                     "print" => Token::Print,
                     "if" => Token::If,
                     "else" => Token::Else,
+                    "while" => Token::While,
                     _ => Token::Identifier(identifier),
                 }
             }
@@ -130,6 +132,10 @@ enum ASTNode {
         then_branch: Vec<ASTNode>,
         else_branch: Vec<ASTNode>,
     },
+    While {
+        condition: Box<ASTNode>,
+        body: Vec<ASTNode>,
+    },
 }
 
 impl ASTNode {
@@ -151,6 +157,12 @@ impl ASTNode {
             } => {
                 ASTNode::collect_variables(condition, vars);
                 for stmt in then_branch.iter().chain(else_branch.iter()) {
+                    ASTNode::collect_variables(stmt, vars);
+                }
+            }
+            ASTNode::While { condition, body } => {
+                ASTNode::collect_variables(condition, vars);
+                for stmt in body {
                     ASTNode::collect_variables(stmt, vars);
                 }
             }
@@ -299,6 +311,20 @@ impl Parser {
             else_branch,
         }
     }
+    fn parse_while(&mut self) -> ASTNode {
+        self.eat(Token::While);
+        self.eat(Token::LParen);
+        let condition = self.parse_comparison();
+        self.eat(Token::RParen);
+        self.eat(Token::LBrace);
+        let body = self.parse_block();
+        self.eat(Token::RBrace);
+
+        ASTNode::While {
+            condition: Box::new(condition),
+            body,
+        }
+    }
     fn parse_block(&mut self) -> Vec<ASTNode> {
         let mut statements = Vec::new();
         while self.current_token != Token::RBrace && self.current_token != Token::EOF {
@@ -310,6 +336,7 @@ impl Parser {
     fn parse_statement(&mut self) -> ASTNode {
         match self.current_token {
             Token::If => self.parse_if(),
+            Token::While => self.parse_while(),
             Token::Print => {
                 self.eat(Token::Print);
                 self.eat(Token::LParen);
@@ -471,6 +498,22 @@ impl CodeGenerator {
                     self.generate(stmt);
                 }
                 self.emit(&format!("{}:", end_label));
+            }
+            ASTNode::While { condition, body } => {
+                let loop_start = self.new_label("loop");
+                let loop_end = self.new_label("end_loop");
+                
+                self.emit(&format!("{}:", loop_start));
+                self.generate(condition);
+                self.emit("    cmp rax, 0");
+                self.emit(&format!("    je {}", loop_end));
+                
+                for stmt in body {
+                    self.generate(stmt);
+                }
+                
+                self.emit(&format!("    jmp {}", loop_start));
+                self.emit(&format!("{}:", loop_end));
             }
         }
     }
