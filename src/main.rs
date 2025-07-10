@@ -1,4 +1,4 @@
-use std::fs;
+THIS SHOULD BE A LINTER ERRORuse std::fs;
 use std::fs::File;
 use std::io::Write;
 
@@ -15,10 +15,22 @@ enum Token {
     If,
     Else,
     While,
+    For,
+    In,
+    Range,
+    Break,
+    Continue,
     LParen,
     RParen,
     LBrace,
     RBrace,
+    Comma,
+    LessThan,
+    GreaterThan,
+    LessEqual,
+    GreaterEqual,
+    NotEqual,
+    Equal,
     EOF,
 }
 
@@ -82,6 +94,11 @@ impl Lexer {
                     "if" => Token::If,
                     "else" => Token::Else,
                     "while" => Token::While,
+                    "for" => Token::For,
+                    "in" => Token::In,
+                    "range" => Token::Range,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
                     _ => Token::Identifier(identifier),
                 }
             }
@@ -100,11 +117,43 @@ impl Lexer {
             Some('-') => Token::Minus,
             Some('*') => Token::Multiply,
             Some('/') => Token::Divide,
-            Some('=') => Token::Assign,
+            Some('=') => {
+                if self.peek_char() == Some('=') {
+                    self.next_char();
+                    Token::Equal
+                } else {
+                    Token::Assign
+                }
+            }
             Some('(') => Token::LParen,
             Some(')') => Token::RParen,
             Some('{') => Token::LBrace,
             Some('}') => Token::RBrace,
+            Some(',') => Token::Comma,
+            Some('<') => {
+                if self.peek_char() == Some('=') {
+                    self.next_char();
+                    Token::LessEqual
+                } else {
+                    Token::LessThan
+                }
+            }
+            Some('>') => {
+                if self.peek_char() == Some('=') {
+                    self.next_char();
+                    Token::GreaterEqual
+                } else {
+                    Token::GreaterThan
+                }
+            }
+            Some('!') => {
+                if self.peek_char() == Some('=') {
+                    self.next_char();
+                    Token::NotEqual
+                } else {
+                    panic!("Unexpected character: '!'");
+                }
+            }
             None => Token::EOF,
             Some(c) => panic!("Unexpected character in input: '{}'", c),
         }
@@ -136,6 +185,13 @@ enum ASTNode {
         condition: Box<ASTNode>,
         body: Vec<ASTNode>,
     },
+    For {
+        variable: String,
+        range_expr: Box<ASTNode>,
+        body: Vec<ASTNode>,
+    },
+    Break,
+    Continue,
 }
 
 impl ASTNode {
@@ -162,6 +218,15 @@ impl ASTNode {
             }
             ASTNode::While { condition, body } => {
                 ASTNode::collect_variables(condition, vars);
+                for stmt in body {
+                    ASTNode::collect_variables(stmt, vars);
+                }
+            }
+            ASTNode::For { variable, range_expr, body } => {
+                if !vars.contains(variable) {
+                    vars.push(variable.clone());
+                }
+                ASTNode::collect_variables(range_expr, vars);
                 for stmt in body {
                     ASTNode::collect_variables(stmt, vars);
                 }
@@ -325,6 +390,24 @@ impl Parser {
             body,
         }
     }
+    fn parse_for(&mut self) -> ASTNode {
+        self.eat(Token::For);
+        self.eat(Token::LParen);
+        let variable = if let Token::Identifier(name) = self.current_token.clone() {
+            self.eat(Token::Identifier(name.clone()));
+            self.eat(Token::In);
+            let range_expr = self.parse_expression();
+            self.eat(Token::RParen);
+            ASTNode::For {
+                variable: name,
+                range_expr: Box::new(range_expr),
+                body: self.parse_block(),
+            }
+        } else {
+            panic!("Expected an identifier for 'for' loop variable");
+        };
+        variable
+    }
     fn parse_block(&mut self) -> Vec<ASTNode> {
         let mut statements = Vec::new();
         while self.current_token != Token::RBrace && self.current_token != Token::EOF {
@@ -337,6 +420,7 @@ impl Parser {
         match self.current_token {
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
+            Token::For => self.parse_for(),
             Token::Print => {
                 self.eat(Token::Print);
                 self.eat(Token::LParen);
@@ -347,6 +431,14 @@ impl Parser {
                 }
             }
             Token::Identifier(_) => self.parse_assignment(),
+            Token::Break => {
+                self.eat(Token::Break);
+                ASTNode::Break
+            }
+            Token::Continue => {
+                self.eat(Token::Continue);
+                ASTNode::Continue
+            }
             _ => panic!(
                 "Unexpected token: {:?}. Expected a statement.",
                 self.current_token
@@ -452,6 +544,31 @@ impl CodeGenerator {
                         self.emit("    sete al"); // at to 1 if equal
                         self.emit("    movzx rax, al"); // zero etend al to rax
                     }
+                    "!=" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    setne al"); // at to 1 if not equal
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
+                    "<" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    setl al"); // at to 1 if less than
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
+                    ">" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    setg al"); // at to 1 if greater than
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
+                    "<=" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    setle al"); // at to 1 if less than or equal
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
+                    ">=" => {
+                        self.emit("    cmp rax, rbx");
+                        self.emit("    setge al"); // at to 1 if greater than or equal
+                        self.emit("    movzx rax, al"); // zero etend al to rax
+                    }
                     _ => panic!("Unsupported operator: {}", operator),
                 }
             }
@@ -514,6 +631,33 @@ impl CodeGenerator {
                 
                 self.emit(&format!("    jmp {}", loop_start));
                 self.emit(&format!("{}:", loop_end));
+            }
+            ASTNode::For { variable, range_expr, body } => {
+                let loop_start = self.new_label("loop");
+                let loop_end = self.new_label("end_loop");
+
+                self.generate(range_expr);
+                self.emit("    mov rbx, rax"); // Store range end in rbx
+                self.emit("    mov rax, 0"); // Initialize loop variable to 0
+                self.emit(&format!("{}:", loop_start));
+                self.emit(&format!("    cmp rax, rbx"));
+                self.emit(&format!("    jge {}", loop_end));
+
+                let temp_var = self.new_label("temp_var");
+                self.emit(&format!("{}:", temp_var));
+                self.emit(&format!("    mov [{}], rax", variable)); // Assign loop variable
+                for stmt in body {
+                    self.generate(stmt);
+                }
+                self.emit("    inc rax"); // Increment loop variable
+                self.emit(&format!("    jmp {}", loop_start));
+                self.emit(&format!("{}:", loop_end));
+            }
+            ASTNode::Break => {
+                self.emit("    jmp .break_target");
+            }
+            ASTNode::Continue => {
+                self.emit("    jmp .continue_target");
             }
         }
     }
