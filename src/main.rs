@@ -1,4 +1,4 @@
-THIS SHOULD BE A LINTER ERRORuse std::fs;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 
@@ -17,7 +17,6 @@ enum Token {
     While,
     For,
     In,
-    Range,
     Break,
     Continue,
     LParen,
@@ -69,6 +68,14 @@ impl Lexer {
         while let Some(c) = self.peek_char() {
             if c.is_whitespace() {
                 self.next_char();
+            } else if c == '#' {
+                // Skip comment until end of line
+                while let Some(ch) = self.peek_char() {
+                    if ch == '\n' {
+                        break;
+                    }
+                    self.next_char();
+                }
             } else {
                 break;
             }
@@ -96,7 +103,6 @@ impl Lexer {
                     "while" => Token::While,
                     "for" => Token::For,
                     "in" => Token::In,
-                    "range" => Token::Range,
                     "break" => Token::Break,
                     "continue" => Token::Continue,
                     _ => Token::Identifier(identifier),
@@ -269,7 +275,21 @@ impl Parser {
             }
             Token::Identifier(name) => {
                 self.eat(Token::Identifier(name.clone()));
-                ASTNode::Variable(name)
+                // Check if this is a function call
+                if name == "range" && self.current_token == Token::LParen {
+                    self.eat(Token::LParen);
+                    let arg = self.parse_expression();
+                    self.eat(Token::RParen);
+                    arg  // For now, range(n) just returns n
+                } else {
+                    ASTNode::Variable(name)
+                }
+            }
+            Token::LParen => {
+                self.eat(Token::LParen);
+                let expr = self.parse_expression();
+                self.eat(Token::RParen);
+                expr
             }
             _ => panic!("Unexpected token in term: {:?}", self.current_token),
         }
@@ -331,25 +351,63 @@ impl Parser {
     fn parse_comparison(&mut self) -> ASTNode {
         let left = self.parse_expression();
 
-        if let Token::Assign = self.current_token {
-            self.eat(Token::Assign);
-            if let Token::Assign = self.current_token {
-                self.eat(Token::Assign);
+        match self.current_token {
+            Token::Equal => {
+                self.eat(Token::Equal);
                 let right = self.parse_expression();
-                return ASTNode::BinaryOp {
+                ASTNode::BinaryOp {
                     left: Box::new(left),
                     operator: "==".to_string(),
                     right: Box::new(right),
-                };
-            } else {
-                panic!(
-                    "Unexpected token: {:?}. Expected '=' for comparison.",
-                    self.current_token
-                );
+                }
             }
+            Token::NotEqual => {
+                self.eat(Token::NotEqual);
+                let right = self.parse_expression();
+                ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: "!=".to_string(),
+                    right: Box::new(right),
+                }
+            }
+            Token::LessThan => {
+                self.eat(Token::LessThan);
+                let right = self.parse_expression();
+                ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: "<".to_string(),
+                    right: Box::new(right),
+                }
+            }
+            Token::GreaterThan => {
+                self.eat(Token::GreaterThan);
+                let right = self.parse_expression();
+                ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: ">".to_string(),
+                    right: Box::new(right),
+                }
+            }
+            Token::LessEqual => {
+                self.eat(Token::LessEqual);
+                let right = self.parse_expression();
+                ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: "<=".to_string(),
+                    right: Box::new(right),
+                }
+            }
+            Token::GreaterEqual => {
+                self.eat(Token::GreaterEqual);
+                let right = self.parse_expression();
+                ASTNode::BinaryOp {
+                    left: Box::new(left),
+                    operator: ">=".to_string(),
+                    right: Box::new(right),
+                }
+            }
+            _ => left,
         }
-
-        left
     }
     fn parse_if(&mut self) -> ASTNode {
         self.eat(Token::If);
@@ -393,20 +451,22 @@ impl Parser {
     fn parse_for(&mut self) -> ASTNode {
         self.eat(Token::For);
         self.eat(Token::LParen);
-        let variable = if let Token::Identifier(name) = self.current_token.clone() {
+        if let Token::Identifier(name) = self.current_token.clone() {
             self.eat(Token::Identifier(name.clone()));
             self.eat(Token::In);
             let range_expr = self.parse_expression();
             self.eat(Token::RParen);
+            self.eat(Token::LBrace);
+            let body = self.parse_block();
+            self.eat(Token::RBrace);
             ASTNode::For {
                 variable: name,
                 range_expr: Box::new(range_expr),
-                body: self.parse_block(),
+                body,
             }
         } else {
             panic!("Expected an identifier for 'for' loop variable");
-        };
-        variable
+        }
     }
     fn parse_block(&mut self) -> Vec<ASTNode> {
         let mut statements = Vec::new();
@@ -633,23 +693,30 @@ impl CodeGenerator {
                 self.emit(&format!("{}:", loop_end));
             }
             ASTNode::For { variable, range_expr, body } => {
-                let loop_start = self.new_label("loop");
-                let loop_end = self.new_label("end_loop");
+                let loop_start = self.new_label("for_loop");
+                let loop_end = self.new_label("end_for");
 
+                // Generate range expression (upper bound)
                 self.generate(range_expr);
                 self.emit("    mov rbx, rax"); // Store range end in rbx
                 self.emit("    mov rax, 0"); // Initialize loop variable to 0
+                
+                // Loop start
                 self.emit(&format!("{}:", loop_start));
-                self.emit(&format!("    cmp rax, rbx"));
+                self.emit("    cmp rax, rbx");
                 self.emit(&format!("    jge {}", loop_end));
-
-                let temp_var = self.new_label("temp_var");
-                self.emit(&format!("{}:", temp_var));
-                self.emit(&format!("    mov [{}], rax", variable)); // Assign loop variable
+                
+                // Store current iteration value in loop variable
+                self.emit(&format!("    mov [{}], rax", variable));
+                
+                // Execute loop body
                 for stmt in body {
                     self.generate(stmt);
                 }
-                self.emit("    inc rax"); // Increment loop variable
+                
+                // Increment and continue
+                self.emit(&format!("    mov rax, [{}]", variable));
+                self.emit("    inc rax");
                 self.emit(&format!("    jmp {}", loop_start));
                 self.emit(&format!("{}:", loop_end));
             }
