@@ -1,0 +1,80 @@
+# Simple Calculator in Viper
+# Demonstrates arithmetic operations, for loops, and comparisons
+
+# Calculate factorial using a for loop
+print(5)  # Calculate 5!
+result = 1
+for (i in range(5)) {
+    if (i > 0) {
+        result = result * i
+    }
+}
+print(result)  # Should print 24 (5! = 5*4*3*2*1 but we start from 0)
+
+# Fix the factorial calculation
+fact = 1
+for (i in range(6)) {
+    if (i > 1) {
+        fact = fact * i
+    }
+}
+print(fact)  # Should print 120 (5! = 5*4*3*2*1)
+
+# Demonstrate comparison operators
+a = 10
+b = 5
+
+# Addition
+sum = a + b
+print(sum)  # 15
+
+# Subtraction
+diff = a - b
+print(diff)  # 5
+
+# Multiplication
+product = a * b
+print(product)  # 50
+
+# Division
+quotient = a / b
+print(quotient)  # 2
+
+# Comparison demonstrations
+if (a > b) {
+    print(1)  # True: 10 > 5
+}
+
+if (a < b) {
+    print(0)  # Won't execute: 10 < 5 is false
+} else {
+    print(2)  # This will execute
+}
+
+if (a == b) {
+    print(3)  # Won't execute: 10 == 5 is false
+} else {
+    print(4)  # This will execute
+}
+
+if (a != b) {
+    print(5)  # True: 10 != 5
+}
+
+# Power calculation using repeated multiplication
+base = 2
+exponent = 3
+power = 1
+for (i in range(exponent)) {
+    power = power * base
+}
+print(power)  # Should print 8 (2^3)
+
+# Sum of numbers from 1 to 10
+total = 0
+for (i in range(11)) {
+    if (i > 0) {
+        total = total + i
+    }
+}
+print(total)  # Should print 55
